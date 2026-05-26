@@ -1,0 +1,38 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Fichiers de cache
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# Dossier clés SSH
+keys/
+
+# Variables
+*.tfvars
+*.tfvars.json
+!example.tfvars
+
+# Fichiers temporaires
+*.tmp
+*.log
+*.pid
+
+# Environment
+.env
+.env.local
