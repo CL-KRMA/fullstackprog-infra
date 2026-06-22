@@ -1,223 +1,288 @@
+# ============================================================
+# Variables
+# ============================================================
+variable "region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "allowed_ssh_cidr" {
+  description = "CIDR autorisé pour SSH (remplace par ton IP : 'x.x.x.x/32')"
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "instance_type" {
+  description = "Type d'instance"
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "ami_id" {
+  description = "AMI Ubuntu 22.04 LTS (us-east-1)"
+  type        = string
+  default     = "ami-08c40ec9ead489470"
+}
+
+variable "volume_size" {
+  description = "Taille du disque en GB"
+  type        = number
+  default     = 20
+}
+
+variable "key_name" {
+  description = "Nom de la clé SSH"
+  type        = string
+  default     = "ma-cle-ssh"
+}
+
+variable "project_name" {
+  description = "Nom du projet (utilisé pour les tags)"
+  type        = string
+  default     = "k3s-cluster"
+}
+
+# ============================================================
+# Provider
+# ============================================================
 provider "aws" {
-  region = "us-east-1"
+  region = var.region
 }
 
-# VPC avec plage 192.168.2.0/24
+# ============================================================
+# Réseau
+# ============================================================
 resource "aws_vpc" "main" {
-  cidr_block = "192.168.2.0/24"
-}
-
-# Subnet unique couvrant tout le réseau (forcé en us-east-1a)
-resource "aws_subnet" "main_subnet" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "192.168.2.0/24"
-  availability_zone = "us-east-1a"
-}
-
-# Internet Gateway
-resource "aws_internet_gateway" "main_gw" {
-  vpc_id = aws_vpc.main.id
+  cidr_block           = "192.168.2.0/24"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
   tags = {
-    Name = "Main-Gateway"
+    Name    = "${var.project_name}-vpc"
+    Project = var.project_name
   }
 }
 
-# Route Table publique
-resource "aws_route_table" "public_rt" {
+resource "aws_subnet" "public" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "192.168.2.0/24"
+  availability_zone       = "${var.region}a"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name    = "${var.project_name}-public-subnet"
+    Project = var.project_name
+  }
+}
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name    = "${var.project_name}-igw"
+    Project = var.project_name
+  }
+}
+
+resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.main_gw.id
+    gateway_id = aws_internet_gateway.main.id
   }
 
   tags = {
-    Name = "Public-RT"
+    Name    = "${var.project_name}-public-rt"
+    Project = var.project_name
   }
 }
 
-# Associer la Route Table au subnet
-resource "aws_route_table_association" "main_assoc" {
-  subnet_id      = aws_subnet.main_subnet.id
-  route_table_id = aws_route_table.public_rt.id
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.public.id
+  route_table_id = aws_route_table.public.id
 }
 
-# Security Group adapté à K3s + HTTP/HTTPS
-resource "aws_security_group" "k3s_sg" {
-  name        = "k3s_cluster_sg"
-  description = "Allow SSH, ICMP, K3s, HTTP and HTTPS"
+# ============================================================
+# Security Group
+# ============================================================
+resource "aws_security_group" "k3s" {
+  name        = "${var.project_name}-sg"
+  description = "Allow SSH, ICMP, K3s, HTTP, HTTPS"
   vpc_id      = aws_vpc.main.id
 
-  # SSH
   ingress {
+    description = "SSH"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_ssh_cidr]
   }
 
-  # ICMP
   ingress {
+    description = "ICMP"
     from_port   = -1
     to_port     = -1
     protocol    = "icmp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allowed_ssh_cidr]
   }
 
-  # K3s API
   ingress {
+    description = "K3s API Server"
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
-    cidr_blocks = ["192.168.2.0/24"]
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
-  # K3s VXLAN
   ingress {
+    description = "K3s VXLAN"
     from_port   = 8472
     to_port     = 8472
     protocol    = "udp"
-    cidr_blocks = ["192.168.2.0/24"]
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
-  # Kubelet
   ingress {
+    description = "Kubelet"
     from_port   = 10250
     to_port     = 10250
     protocol    = "tcp"
-    cidr_blocks = ["192.168.2.0/24"]
+    cidr_blocks = [aws_vpc.main.cidr_block]
   }
 
-  # NodePorts
   ingress {
+    description = "NodePorts"
     from_port   = 30000
     to_port     = 32767
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # HTTP
   ingress {
+    description = "HTTP"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # HTTPS
   ingress {
+    description = "HTTPS"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Sortie libre
   egress {
+    description = "All outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  tags = {
+    Name    = "${var.project_name}-sg"
+    Project = var.project_name
+  }
 }
 
-# Key Pair
-resource "aws_key_pair" "my_key" {
-  key_name   = "ma-cle-ssh"
-  public_key = file("${path.module}/keys/ma-cle-ssh.pub")
+# ============================================================
+# Clé SSH
+# ============================================================
+resource "aws_key_pair" "main" {
+  key_name   = var.key_name
+  public_key = file("${path.module}/keys/${var.key_name}.pub")
+
+  tags = {
+    Project = var.project_name
+  }
 }
 
-# VPS1 - Master
-resource "aws_instance" "ubuntu_vps1" {
-  ami           = "ami-08c40ec9ead489470"
-  instance_type = "t3.medium"
-  subnet_id     = aws_subnet.main_subnet.id
-  vpc_security_group_ids = [aws_security_group.k3s_sg.id]
-  private_ip    = "192.168.2.10"
-  key_name      = aws_key_pair.my_key.key_name
-  associate_public_ip_address = true
+# ============================================================
+# Locals
+# ============================================================
+locals {
+  nodes = {
+    master   = { private_ip = "192.168.2.10", role = "master" }
+    worker-1 = { private_ip = "192.168.2.11", role = "worker" }
+    worker-2 = { private_ip = "192.168.2.12", role = "worker" }
+  }
+}
+
+# ============================================================
+# Instances EC2
+# ============================================================
+resource "aws_instance" "nodes" {
+  for_each = local.nodes
+
+  ami                         = var.ami_id
+  instance_type               = var.instance_type
+  subnet_id                   = aws_subnet.public.id
+  vpc_security_group_ids      = [aws_security_group.k3s.id]
+  private_ip                  = each.value.private_ip
+  key_name                    = aws_key_pair.main.key_name
+  associate_public_ip_address = false
 
   root_block_device {
-    volume_size = 20
-    volume_type = "gp3"
+    volume_size           = var.volume_size
+    volume_type           = "gp3"
+    encrypted             = true
+    delete_on_termination = true
   }
 
   tags = {
-    Name = "Ubuntu-VPS1-Master"
+    Name    = "${var.project_name}-${each.key}"
+    Role    = each.value.role
+    Project = var.project_name
   }
 }
 
-resource "aws_eip" "vps1_ip" {
-  instance = aws_instance.ubuntu_vps1.id
-}
-
-# VPS2 - Worker
-resource "aws_instance" "ubuntu_vps2" {
-  ami           = "ami-08c40ec9ead489470"
-  instance_type = "t3.medium"
-  subnet_id     = aws_subnet.main_subnet.id
-  vpc_security_group_ids = [aws_security_group.k3s_sg.id]
-  private_ip    = "192.168.2.11"
-  key_name      = aws_key_pair.my_key.key_name
-  associate_public_ip_address = true
-
-  root_block_device {
-    volume_size = 20
-    volume_type = "gp3"
-  }
+# ============================================================
+# Elastic IPs
+# ============================================================
+resource "aws_eip" "nodes" {
+  for_each = local.nodes
+  instance = aws_instance.nodes[each.key].id
+  domain   = "vpc"
 
   tags = {
-    Name = "Ubuntu-VPS2-Worker"
+    Name    = "${var.project_name}-eip-${each.key}"
+    Project = var.project_name
   }
 }
 
-resource "aws_eip" "vps2_ip" {
-  instance = aws_instance.ubuntu_vps2.id
-}
-
-# VPS3 - Worker
-resource "aws_instance" "ubuntu_vps3" {
-  ami           = "ami-08c40ec9ead489470"
-  instance_type = "t3.medium"
-  subnet_id     = aws_subnet.main_subnet.id
-  vpc_security_group_ids = [aws_security_group.k3s_sg.id]
-  private_ip    = "192.168.2.12"
-  key_name      = aws_key_pair.my_key.key_name
-  associate_public_ip_address = true
-
-  root_block_device {
-    volume_size = 20
-    volume_type = "gp3"
-  }
-
-  tags = {
-    Name = "Ubuntu-VPS3-Worker"
-  }
-}
-
-resource "aws_eip" "vps3_ip" {
-  instance = aws_instance.ubuntu_vps3.id
-}
-
+# ============================================================
 # Outputs
-output "vps1_private_ip" {
-  value = aws_instance.ubuntu_vps1.private_ip
-}
-output "vps1_public_ip" {
-  value = aws_eip.vps1_ip.public_ip
-}
-
-output "vps2_private_ip" {
-  value = aws_instance.ubuntu_vps2.private_ip
-}
-output "vps2_public_ip" {
-  value = aws_eip.vps2_ip.public_ip
+# ============================================================
+output "nodes" {
+  description = "IPs publiques et privées des nœuds"
+  value = {
+    for name in keys(local.nodes) : name => {
+      private_ip = aws_instance.nodes[name].private_ip
+      public_ip  = aws_eip.nodes[name].public_ip
+      role       = local.nodes[name].role
+    }
+  }
 }
 
-output "vps3_private_ip" {
-  value = aws_instance.ubuntu_vps3.private_ip
+output "cluster_summary" {
+  description = "Résumé du cluster"
+  value = {
+    master   = aws_eip.nodes["master"].public_ip
+    worker_1 = aws_eip.nodes["worker-1"].public_ip
+    worker_2 = aws_eip.nodes["worker-2"].public_ip
+    region   = var.region
+  }
 }
-output "vps3_public_ip" {
-  value = aws_eip.vps3_ip.public_ip
+
+output "ssh_commands" {
+  description = "Commandes SSH pour se connecter aux nœuds"
+  value = {
+    for name in keys(local.nodes) :
+    name => "ssh -i keys/${var.key_name} ubuntu@${aws_eip.nodes[name].public_ip}"
+  }
 }

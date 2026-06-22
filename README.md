@@ -1,6 +1,6 @@
 # Cluster K3s sur AWS avec Terraform
 
-Ce projet Terraform configure une infrastructure complète pour déployer un cluster Kubernetes K3s haute disponibilité sur AWS.
+Ce projet Terraform configure une infrastructure complète pour déployer un cluster Kubernetes K3s sur AWS.
 
 ## 📋 Table des matières
 
@@ -18,42 +18,44 @@ Ce projet Terraform configure une infrastructure complète pour déployer un clu
 ## 🎯 Vue d'ensemble
 
 Ce projet Terraform déploie un cluster Kubernetes K3s sur AWS composé de :
-- **1 nœud Master** (contrôleur)
-- **2 nœuds Worker** (calcul)
+- **1 nœud Master** (contrôleur du cluster)
+- **2 nœuds Worker** (exécution des workloads)
 
-Tous les nœuds utilisent des instances EC2 **t3.medium** avec **20 GB** de stockage SSD (gp3) et bénéficient d'adresses IP publiques élastiques.
+Tous les nœuds utilisent des instances EC2 **t3.medium** avec **20 GB** de stockage SSD (gp3) et bénéficient d'adresses IP élastiques (EIP) fixes.
 
 ### En clair, ce code fait quoi ?
 
 **Simplement : il crée automatiquement 3 serveurs dans le cloud AWS prêts à fonctionner ensemble comme un cluster Kubernetes.**
 
 À l'exécution, le code :
-1. **Crée un réseau privé** (VPC) pour que les 3 serveurs communiquent entre eux
-2. **Crée 3 serveurs Ubuntu** avec chacun 20 GB de disque
-3. **Configure les règles de sécurité** pour autoriser le trafic nécessaire (SSH, ports Kubernetes, etc.)
+1. **Crée un réseau privé** (VPC avec DNS activé) pour que les 3 serveurs communiquent entre eux
+2. **Crée 3 serveurs Ubuntu** avec chacun 20 GB de disque chiffré
+3. **Configure les règles de sécurité** pour autoriser le trafic nécessaire (SSH, ports Kubernetes, HTTP/HTTPS)
 4. **Ajoute une clé SSH** pour pouvoir se connecter en ligne de commande
-5. **Assigne des adresses IP publiques** pour accéder aux serveurs depuis internet
+5. **Assigne des adresses IP élastiques fixes** — les IPs ne changent pas même après redémarrage
 
-Une fois déployé, tu peux installer Kubernetes sur ces 3 serveurs et lancer des applications en conteneurs.
+Une fois déployé, tu peux installer K3s sur ces 3 serveurs et lancer des applications en conteneurs.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────┐
 │        VPC (192.168.2.0/24)             │
+│        DNS activé                        │
 ├─────────────────────────────────────────┤
 │  ┌──────────────────────────────────┐   │
-│  │  Subnet (us-east-1a)             │   │
+│  │  Subnet public (us-east-1a)      │   │
 │  │  192.168.2.0/24                  │   │
 │  ├──────────────────────────────────┤   │
-│  │ Master (192.168.2.10)            │   │
-│  │ Worker1 (192.168.2.11)           │   │
-│  │ Worker2 (192.168.2.12)           │   │
+│  │ k3s-cluster-master   (192.168.2.10) │ │
+│  │ k3s-cluster-worker-1 (192.168.2.11) │ │
+│  │ k3s-cluster-worker-2 (192.168.2.12) │ │
 │  └──────────────────────────────────┘   │
 │                                          │
-│  Internet Gateway (IGW)                  │
+│  Internet Gateway                        │
 │  Route Table (0.0.0.0/0 → IGW)          │
 │  Security Group (K3s ports)              │
+│  3 × Elastic IPs (fixes)                │
 └─────────────────────────────────────────┘
 ```
 
@@ -64,34 +66,33 @@ Une fois déployé, tu peux installer Kubernetes sur ces 3 serveurs et lancer de
 - **Terraform** >= 1.0 ([Installation](https://www.terraform.io/downloads.html))
 - **AWS CLI** >= 2.0 ([Installation](https://aws.amazon.com/fr/cli/))
 - **Compte AWS** avec permissions suffisantes
-- **Clé SSH** (sera générée ou utilisée)
+- **Clé SSH** générée localement
 
 ### Permissions AWS requises
 
 Votre utilisateur AWS doit avoir accès à :
-- EC2 (instances, security groups, key pairs)
+- EC2 (instances, security groups, key pairs, EIP)
 - VPC (VPC, subnets, internet gateways, route tables)
-- Elastic IPs
 
 ## 🚀 Installation
 
-### 1. Cloner ou télécharger le projet
+### 1. Cloner le projet
 
 ```bash
-https://github.com/CL-KRMA/aws-terraform-config
+git clone https://github.com/CL-KRMA/aws-terraform-config
+cd aws-terraform-config
 ```
 
-### 2. Générer une clé SSH (si nécessaire)
-
-Si vous n'avez pas déjà de clé SSH :
+### 2. Générer une clé SSH
 
 ```bash
+mkdir -p keys
 ssh-keygen -t rsa -b 4096 -f keys/ma-cle-ssh -N ""
 ```
 
 Cette commande crée :
-- `keys/ma-cle-ssh` (clé privée)
-- `keys/ma-cle-ssh.pub` (clé publique)
+- `keys/ma-cle-ssh` (clé privée — ne jamais partager)
+- `keys/ma-cle-ssh.pub` (clé publique — utilisée par Terraform)
 
 ### 3. Configurer les credentials AWS
 
@@ -107,20 +108,28 @@ Entrez :
 
 ## ⚙️ Configuration
 
-### Variables (optionnelles)
+### Variables disponibles dans `main.tf`
 
-Vous pouvez modifier les paramètres dans `main.tf` :
+| Variable | Valeur par défaut | Description |
+|---|---|---|
+| `region` | `us-east-1` | Région AWS |
+| `instance_type` | `t3.medium` | Type d'instance EC2 |
+| `ami_id` | `ami-08c40ec9ead489470` | Ubuntu 22.04 LTS |
+| `volume_size` | `20` | Taille du disque en GB |
+| `key_name` | `ma-cle-ssh` | Nom de la clé SSH |
+| `project_name` | `k3s-cluster` | Préfixe des ressources AWS |
+| `allowed_ssh_cidr` | `0.0.0.0/0` | CIDR autorisé pour SSH |
 
-| Paramètre | Valeur actuelle | Description |
-|-----------|-----------------|-------------|
-| Region | `us-east-1` | Région AWS |
-| VPC CIDR | `192.168.2.0/24` | Bloc réseau du VPC |
-| Instance Type | `t3.medium` | Type d'instance EC2 |
-| Volume Size | `20` | Taille du disque en GB |
-| Volume Type | `gp3` | Type de stockage (SSD performant) |
-| Master IP | `192.168.2.10` | IP privée du master |
-| Worker1 IP | `192.168.2.11` | IP privée du worker 1 |
-| Worker2 IP | `192.168.2.12` | IP privée du worker 2 |
+> **Sécurité** : En production, remplace `allowed_ssh_cidr` par ton IP (`x.x.x.x/32`) pour restreindre l'accès SSH.
+
+### Exemple de personnalisation
+
+```hcl
+# terraform.tfvars
+project_name     = "mon-projet"
+instance_type    = "t3.large"
+allowed_ssh_cidr = "203.0.113.0/32"  # ton IP uniquement
+```
 
 ## 🎬 Déploiement
 
@@ -130,15 +139,13 @@ Vous pouvez modifier les paramètres dans `main.tf` :
 terraform init
 ```
 
-Cela télécharge les providers AWS et initialise le répertoire `.terraform`.
-
 ### Étape 2 : Planifier le déploiement
 
 ```bash
 terraform plan -out=tfplan
 ```
 
-Cela affiche toutes les ressources qui seront créées. Vérifiez que tout est correct.
+Vérifie que **19 ressources** vont être créées (VPC, subnet, IGW, route table, SG, key pair, 3 instances, 3 EIP).
 
 ### Étape 3 : Appliquer la configuration
 
@@ -146,21 +153,34 @@ Cela affiche toutes les ressources qui seront créées. Vérifiez que tout est c
 terraform apply tfplan
 ```
 
-Cela crée toutes les ressources sur AWS. **Comptez 5-10 minutes** pour que tout soit opérationnel.
+Comptez **5-10 minutes** pour que tout soit opérationnel.
 
-### Étape 4 : Récupérer les adresses IP
-
-Après le déploiement, les adresses IP publiques apparaissent. Vous pouvez les afficher avec :
+### Étape 4 : Récupérer les informations du cluster
 
 ```bash
 terraform output
 ```
 
-Ou dans la console AWS EC2.
+Exemple de résultat :
+```
+nodes = {
+  master   = { private_ip = "192.168.2.10", public_ip = "54.x.x.x", role = "master" }
+  worker-1 = { private_ip = "192.168.2.11", public_ip = "54.x.x.x", role = "worker" }
+  worker-2 = { private_ip = "192.168.2.12", public_ip = "54.x.x.x", role = "worker" }
+}
+
+ssh_commands = {
+  master   = "ssh -i keys/ma-cle-ssh ubuntu@54.x.x.x"
+  worker-1 = "ssh -i keys/ma-cle-ssh ubuntu@54.x.x.x"
+  worker-2 = "ssh -i keys/ma-cle-ssh ubuntu@54.x.x.x"
+}
+```
 
 ## 🔌 Accès au cluster
 
-### Connexion SSH aux nœuds
+### Connexion SSH
+
+Utilise les commandes générées par `terraform output ssh_commands` :
 
 ```bash
 # Master
@@ -173,64 +193,64 @@ ssh -i keys/ma-cle-ssh ubuntu@<WORKER1_PUBLIC_IP>
 ssh -i keys/ma-cle-ssh ubuntu@<WORKER2_PUBLIC_IP>
 ```
 
-Remplacez `<MASTER_PUBLIC_IP>`, etc., par les IPs publiques réelles.
-
 ### Installation de K3s
 
-Une fois connecté au master :
+**Sur le master :**
 
 ```bash
 curl -sfL https://get.k3s.io | sh -
+
+# Récupérer le token pour les workers
+sudo cat /var/lib/rancher/k3s/server/node-token
 ```
 
-Sur les workers :
+**Sur chaque worker (répéter pour worker-1 et worker-2) :**
 
 ```bash
-curl -sfL https://get.k3s.io | K3S_URL=https://<MASTER_IP>:6443 \
+curl -sfL https://get.k3s.io | K3S_URL=https://192.168.2.10:6443 \
   K3S_TOKEN=<TOKEN> sh -
 ```
 
-Récupérez le token depuis le master :
+**Vérifier que le cluster est opérationnel :**
 
 ```bash
-cat /var/lib/rancher/k3s/server/node-token
+sudo kubectl get nodes
+# NAME       STATUS   ROLES                  AGE
+# master     Ready    control-plane,master   2m
+# worker-1   Ready    <none>                 1m
+# worker-2   Ready    <none>                 1m
 ```
 
 ## 📦 Ressources créées
 
 ### Réseau
-- **VPC** : `aws_vpc.main`
-- **Subnet** : `aws_subnet.main_subnet`
-- **Internet Gateway** : `aws_internet_gateway.main_gw`
-- **Route Table** : `aws_route_table.public_rt`
-- **Association RT-Subnet** : `aws_route_table_association.main_assoc`
+| Ressource | Nom Terraform | Description |
+|---|---|---|
+| VPC | `aws_vpc.main` | Réseau privé avec DNS activé |
+| Subnet | `aws_subnet.public` | Subnet public us-east-1a |
+| Internet Gateway | `aws_internet_gateway.main` | Accès internet |
+| Route Table | `aws_route_table.public` | Routage vers IGW |
 
 ### Sécurité
-- **Security Group** : `aws_security_group.k3s_sg`
-  - SSH (22)
-  - ICMP (ping)
-  - K3s API (6443)
-  - K3s VXLAN (8472/UDP)
-  - Kubelet (10250)
-  - NodePorts (30000-32767)
-  - HTTP/HTTPS (80, 443)
+| Port | Protocole | Source | Usage |
+|---|---|---|---|
+| 22 | TCP | `allowed_ssh_cidr` | SSH |
+| ICMP | - | `allowed_ssh_cidr` | Ping |
+| 6443 | TCP | VPC interne | K3s API Server |
+| 8472 | UDP | VPC interne | K3s VXLAN (Flannel) |
+| 10250 | TCP | VPC interne | Kubelet |
+| 30000-32767 | TCP | 0.0.0.0/0 | NodePorts |
+| 80 | TCP | 0.0.0.0/0 | HTTP |
+| 443 | TCP | 0.0.0.0/0 | HTTPS |
 
-### Calcul
-- **Key Pair** : `aws_key_pair.my_key`
-- **Master** : `aws_instance.ubuntu_vps1`
-  - Type : t3.medium
-  - IP privée : 192.168.2.10
-  - IP élastique : `aws_eip.vps1_ip`
+### Instances EC2
+| Nœud | IP privée | Type | Disque | Role |
+|---|---|---|---|---|
+| master | 192.168.2.10 | t3.medium | 20GB gp3 chiffré | control-plane |
+| worker-1 | 192.168.2.11 | t3.medium | 20GB gp3 chiffré | worker |
+| worker-2 | 192.168.2.12 | t3.medium | 20GB gp3 chiffré | worker |
 
-- **Worker 1** : `aws_instance.ubuntu_vps2`
-  - Type : t3.medium
-  - IP privée : 192.168.2.11
-  - IP élastique : `aws_eip.vps2_ip`
-
-- **Worker 2** : `aws_instance.ubuntu_vps3`
-  - Type : t3.medium
-  - IP privée : 192.168.2.12
-  - IP élastique : `aws_eip.vps3_ip`
+> Chaque instance a une **Elastic IP fixe** — l'IP ne change pas après redémarrage.
 
 ## 🔧 Maintenance
 
@@ -238,20 +258,27 @@ cat /var/lib/rancher/k3s/server/node-token
 
 ```bash
 terraform show
+terraform output
 ```
 
-### Modifier une ressource
+### Modifier le type d'instance
 
-1. Éditez `main.tf`
-2. Exécutez `terraform plan`
-3. Vérifiez les changements
-4. Exécutez `terraform apply`
+```bash
+# Dans main.tf ou terraform.tfvars
+instance_type = "t3.large"
 
-### Sauvegarder l'état
+terraform plan   # vérifier l'impact
+terraform apply  # appliquer
+```
 
-L'état Terraform est sauvegardé dans `terraform.tfstate` et `terraform.tfstate.backup`. 
+### Sauvegarder l'état Terraform
 
-**Ne modifiez pas ces fichiers directement.**
+```bash
+# Copier le state dans S3 (recommandé en équipe)
+terraform init -backend-config="bucket=mon-bucket-tfstate"
+```
+
+> **Important** : Ne jamais modifier `terraform.tfstate` manuellement.
 
 ## 🗑️ Nettoyage
 
@@ -261,31 +288,37 @@ Pour détruire toutes les ressources et éviter les frais AWS :
 terraform destroy
 ```
 
-Confirmez en tapant `yes` quand demandé.
+Confirme en tapant `yes`. Toutes les ressources (instances, EIP, VPC, SG) seront supprimées.
 
 ## 📊 Coûts estimés
 
 | Ressource | Quantité | Coût/mois |
-|-----------|----------|-----------|
+|---|---|---|
 | t3.medium (on-demand) | 3 | ~$120 |
-| EIP (si attachée) | 3 | $0 |
-| **Total** | | **~$120** |
+| EIP attachées à une instance | 3 | $0 |
+| gp3 20GB | 3 | ~$5 |
+| **Total** | | **~$125/mois** |
 
-*Les coûts varient selon la région et les promotions AWS.*
+> Pour réduire les coûts : utilise des **Spot Instances** (économie de 60-70%) ou éteins les instances quand tu ne les utilises pas (`terraform apply -var="instance_count=0"`).
 
 ## 🐛 Dépannage
 
 ### "Terraform not found"
-Installez Terraform : https://www.terraform.io/downloads.html
+Installe Terraform : https://www.terraform.io/downloads.html
 
 ### "AWS credentials not found"
-Exécutez `aws configure` avec vos clés d'accès.
+Exécute `aws configure` avec tes clés d'accès.
 
 ### "Permission denied (publickey)"
-Vérifiez que le fichier `keys/ma-cle-ssh` existe et a les bonnes permissions (600).
+```bash
+chmod 600 keys/ma-cle-ssh
+```
+
+### Les workers ne rejoignent pas le master
+Vérifie que le DNS est activé sur le VPC et que le port 6443 est accessible depuis le subnet interne.
 
 ### Les instances mettent longtemps à démarrer
-C'est normal, AWS a besoin de 5-10 minutes pour initialiser les ressources.
+Normal — AWS a besoin de 5-10 minutes pour initialiser les ressources.
 
 ## 📚 Ressources
 
@@ -294,10 +327,10 @@ C'est normal, AWS a besoin de 5-10 minutes pour initialiser les ressources.
 - [Documentation AWS VPC](https://docs.aws.amazon.com/vpc/)
 - [Pricing AWS EC2](https://aws.amazon.com/fr/ec2/pricing/on-demand/)
 
-## 📝 License
+## 📝 Licence
 
 Ce projet est libre d'utilisation.
 
 ## 👤 Auteur
 
-Créé pour un cluster K3s de démonstration - Mai 2026
+Créé pour un cluster K3s de démonstration — Juin 2026
